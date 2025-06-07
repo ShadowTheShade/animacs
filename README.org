@@ -1,4 +1,4 @@
-#+TITLE: Animacs
-#+DESCRIPTION: A GNU Emacs Package for Browsing and Watching Anime
+#+TITLE: animacs
+#+DESCRIPTION: a GNU Emacs package for browsing and watching anime
 #+AUTHOR: Anthony Gagliano
 #+EMAIL: antogagliano3@gmail.com
