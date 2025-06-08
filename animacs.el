@@ -70,7 +70,11 @@
           shows))
 
 (defconst episodes-gql
-  "query ($showId: String!) { show(_id: $showId) { _id availableEpisodesDetail } }")
+  "query ($showId: String!) {
+     show(_id: $showId) {
+       _id availableEpisodesDetail
+     }
+   }")
 
 (defun generate-episodes-url (show-id)
   (format "%s?query=%s&variables=%s"
