@@ -36,16 +36,26 @@
           (url-hexify-string search-gql)
           (url-hexify-string variables)))
 
+(defconst search-anime-gql
+  "query ($search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) {
+     shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) {
+       edges {
+         _id name availableEpisodes __typename
+       }
+     }
+   }"
+  )
+
 (defun search-anime (query mode)
   "Search AllAnime using QUERY string and MODE (e.g., \"sub\" or \"dub\")."
-  (let* ((search-gql "query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name availableEpisodes __typename } }}")
-         (variables (generate-search-variables query mode))
-         (url (generate-api-url search-gql variables))
-         (response (plz 'get url
-                     :headers `(("User-Agent" . ,allanime-agent)
-                                ("Referer" . ,allanime-refr))
-                     :decode 'json))
-	 (hashed-data (json-parse-string response))
+  (let* ((search-gql   search-anime-gql)
+         (variables    (generate-search-variables query mode))
+         (url          (generate-api-url search-gql variables))
+         (response     (plz 'get url
+			 :headers `(("User-Agent" . ,allanime-agent)
+                                    ("Referer" . ,allanime-refr))
+			 :decode 'json))
+	 (hashed-data  (json-parse-string response))
 	 (hashed-shows (gethash "edges" (gethash "shows" (gethash "data" hashed-data)))))
     hashed-shows))
 
@@ -59,18 +69,6 @@
                   show))
           shows))
 
-(defun select-anime-id (query mode)
-  "Search for QUERY in given MODE, prompt user to select a show, and return its _id."
-  (interactive
-   (list (read-string "Search query: ")
-         (completing-read "Mode: " '("sub" "dub") nil t)))
-  (let* ((shows (search-anime query mode))
-         (completion-table (build-anime-completion-table shows))
-         (selected (completing-read "Select a show: " completion-table nil t)))
-    (let ((show (cdr (assoc selected completion-table))))
-      (message "Selected show _id: %s" (gethash "_id" show))
-      (gethash "_id" show))))
-
 (defconst episodes-gql
   "query ($showId: String!) { show(_id: $showId) { _id availableEpisodesDetail } }")
 
@@ -82,29 +80,29 @@
 
 (defun fetch-episode-list (show-id mode)
   "Return sorted list of episode numbers for SHOW-ID in MODE (\"sub\" or \"dub\")."
-  (let* ((url (generate-episodes-url show-id))
-         (response (plz 'get url
-                     :headers `(("User-Agent" . ,allanime-agent)
-                                ("Referer" . ,allanime-refr))
-                     :decode 'json))
+  (let* ((url             (generate-episodes-url show-id))
+         (response        (plz 'get url
+			    :headers `(("User-Agent" . ,allanime-agent)
+                                       ("Referer" . ,allanime-refr))
+			    :decode 'json))
 	 (hashed-response (json-parse-string response))
-         (detail (gethash "availableEpisodesDetail"
-                          (gethash "show"
-                                   (gethash "data" hashed-response))))
-         (episodes (gethash mode detail)))
+         (detail          (gethash "availableEpisodesDetail"
+				   (gethash "show"
+					    (gethash "data" hashed-response))))
+         (episodes        (gethash mode detail)))
     (sort (mapcar #'string-to-number (append episodes nil)) #'<)))
 
 (defun select-and-show-episodes ()
   "Interactively select a show and display its available episodes."
   (interactive)
-  (let* ((query (read-string "Search query: "))
-         (mode (completing-read "Mode: " '("sub" "dub") nil t))
-         (shows (search-anime query mode))
+  (let* ((query            (read-string "Search query: "))
+         (mode             (completing-read "Mode: " '("sub" "dub") nil t))
+         (shows            (search-anime query mode))
          (completion-table (build-anime-completion-table shows))
-         (selected (completing-read "Select a show: " completion-table nil t))
-         (show (cdr (assoc selected completion-table)))
-         (show-id (gethash "_id" show))
-         (episodes (fetch-episode-list show-id mode)))
+         (selected         (completing-read "Select a show: " completion-table nil t))
+         (show             (cdr (assoc selected completion-table)))
+         (show-id          (gethash "_id" show))
+         (episodes         (fetch-episode-list show-id mode)))
     (with-current-buffer (get-buffer-create "*Animacs Episodes*")
       (read-only-mode -1)
       (erase-buffer)
