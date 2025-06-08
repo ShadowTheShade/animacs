@@ -49,26 +49,67 @@
 	 (hashed-shows (gethash "edges" (gethash "shows" (gethash "data" hashed-data)))))
     hashed-shows))
 
-(defun create-anime-list (hash)
-  "Convert a list of anime show hash tables into formatted strings."
+(defun build-anime-completion-table (shows)
+  "Return an alist of (display-string . show-hash) for completion."
   (mapcar (lambda (show)
-            (format "Name: %s | Sub: %d | Dub: %d"
-                    (gethash "name" show)
-                    (gethash "sub" (gethash "availableEpisodes" show))
-                    (gethash "dub" (gethash "availableEpisodes" show))))  
-	  hash))
+            (cons (format "%s [sub: %d | dub: %d]"
+                          (gethash "name" show)
+                          (gethash "sub" (gethash "availableEpisodes" show))
+                          (gethash "dub" (gethash "availableEpisodes" show)))
+                  show))
+          shows))
 
-(defun display-search-anime-results (query mode)
-  "Search for QUERY in given MODE and display formatted results in a buffer."
+(defun select-anime-id (query mode)
+  "Search for QUERY in given MODE, prompt user to select a show, and return its _id."
   (interactive
    (list (read-string "Search query: ")
          (completing-read "Mode: " '("sub" "dub") nil t)))
-  (let* ((results (search-anime query mode))
-         (lines (create-anime-list results)))
-    (with-current-buffer (get-buffer-create "*Animacs Results*")
+  (let* ((shows (search-anime query mode))
+         (completion-table (build-anime-completion-table shows))
+         (selected (completing-read "Select a show: " completion-table nil t)))
+    (let ((show (cdr (assoc selected completion-table))))
+      (message "Selected show _id: %s" (gethash "_id" show))
+      (gethash "_id" show))))
+
+(defconst episodes-gql
+  "query ($showId: String!) { show(_id: $showId) { _id availableEpisodesDetail } }")
+
+(defun generate-episodes-url (show-id)
+  (format "%s?query=%s&variables=%s"
+          allanime-api
+          (url-hexify-string episodes-gql)
+          (url-hexify-string (json-encode `(("showId" . ,show-id))))))
+
+(defun fetch-episode-list (show-id mode)
+  "Return sorted list of episode numbers for SHOW-ID in MODE (\"sub\" or \"dub\")."
+  (let* ((url (generate-episodes-url show-id))
+         (response (plz 'get url
+                     :headers `(("User-Agent" . ,allanime-agent)
+                                ("Referer" . ,allanime-refr))
+                     :decode 'json))
+	 (hashed-response (json-parse-string response))
+         (detail (gethash "availableEpisodesDetail"
+                          (gethash "show"
+                                   (gethash "data" hashed-response))))
+         (episodes (gethash mode detail)))
+    (sort (mapcar #'string-to-number (append episodes nil)) #'<)))
+
+(defun select-and-show-episodes ()
+  "Interactively select a show and display its available episodes."
+  (interactive)
+  (let* ((query (read-string "Search query: "))
+         (mode (completing-read "Mode: " '("sub" "dub") nil t))
+         (shows (search-anime query mode))
+         (completion-table (build-anime-completion-table shows))
+         (selected (completing-read "Select a show: " completion-table nil t))
+         (show (cdr (assoc selected completion-table)))
+         (show-id (gethash "_id" show))
+         (episodes (fetch-episode-list show-id mode)))
+    (with-current-buffer (get-buffer-create "*Animacs Episodes*")
       (read-only-mode -1)
       (erase-buffer)
-      (insert (string-join lines "\n"))
+      (insert (format "Available %s episodes for: %s\n\n" mode (gethash "name" show)))
+      (insert (mapconcat #'number-to-string episodes "\n"))
       (goto-char (point-min))
       (read-only-mode 1)
       (display-buffer (current-buffer)))))
