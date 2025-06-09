@@ -40,6 +40,16 @@
   :type 'string
   :group 'animacs)
 
+(defconst animacs-search-anime-gql
+  "query ($search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) {
+     shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) {
+       edges {
+         _id name availableEpisodes __typename
+       }
+     }
+   }"
+  )
+
 (defun animacs-generate-search-variables (query mode)
   (json-encode
    `(("search" . (("allowAdult" . :json-false)
@@ -56,37 +66,35 @@
           (url-hexify-string search-gql)
           (url-hexify-string variables)))
 
-(defconst animacs-search-anime-gql
-  "query ($search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) {
-     shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) {
-       edges {
-         _id name availableEpisodes __typename
-       }
-     }
-   }"
-  )
-
-(defun animacs-search-anime (query mode)
-  "Search AllAnime using QUERY string and MODE (e.g., \"sub\" or \"dub\")."
-  (let* ((search-gql   animacs-search-anime-gql)
-         (variables    (animacs-generate-search-variables query mode))
-         (url          (animacs-generate-api-url search-gql variables))
-         (response     (plz 'get url
-			 :headers `(("User-Agent" . ,animacs-allanime-agent)
-                                    ("Referer" . ,animacs-allanime-refr))
-			 :decode 'json))
-	 (hashed-data  (json-parse-string response))
-	 (hashed-shows (gethash "edges" (gethash "shows" (gethash "data" hashed-data)))))
-    hashed-shows))
+(defun animacs-search-anime (query)
+  "Search AllAnime for QUERY, using the user’s `animacs-mode`."
+  (let* ((mode       animacs-mode)
+         (search-gql animacs-search-anime-gql)
+         (vars       (animacs-generate-search-variables query mode))
+         (url        (animacs-generate-api-url search-gql vars))
+         (response   (plz 'get url
+                          :headers `(("User-Agent" . ,animacs-allanime-agent)
+                                     ("Referer"    . ,animacs-allanime-refr))
+                          :decode 'json))
+         (data       (json-parse-string response))
+         (edges      (gethash "edges" (gethash "shows" (gethash "data" data)))))
+    ;; Return a list of plists for easy downstream use:
+    (mapcar (lambda (ht)
+              (list :id                 (gethash "_id" ht)
+                    :title              (gethash "name" ht)
+                    :available-episodes (gethash (if (string= mode "dub") "dub" "sub")
+                                                 (gethash "availableEpisodes" ht))))
+            edges)))
 
 (defun animacs-build-anime-completion-table (shows)
-  "Return an alist of (display-string . show-hash) for completion."
+  "Return an alist of (DISPLAY . show-plist) for completion.
+SHOWS is a list of plists with keys :id, :title and :available-episodes."
   (mapcar (lambda (show)
-            (cons (format "%s [sub: %d | dub: %d]"
-                          (gethash "name" show)
-                          (gethash "sub" (gethash "availableEpisodes" show))
-                          (gethash "dub" (gethash "availableEpisodes" show)))
-                  show))
+            (cons
+             (format "%s (%d episodes)"
+                     (plist-get show :title)
+                     (plist-get show :available-episodes))
+             show))
           shows))
 
 (defconst animacs-episodes-gql
@@ -121,16 +129,16 @@
   (interactive)
   (let* ((query            (read-string "Search query: "))
          (mode             (completing-read "Mode: " '("sub" "dub") nil t))
-         (shows            (animacs-search-anime query mode))
+         (shows            (animacs-search-anime query))
          (completion-table (animacs-build-anime-completion-table shows))
          (selected         (completing-read "Select a show: " completion-table nil t))
          (show             (cdr (assoc selected completion-table)))
-         (show-id          (gethash "_id" show))
+         (show-id          (plist-get show :id))
          (episodes         (animacs-fetch-episode-list show-id mode)))
     (with-current-buffer (get-buffer-create "*Animacs Episodes*")
       (read-only-mode -1)
       (erase-buffer)
-      (insert (format "Available %s episodes for: %s\n\n" mode (gethash "name" show)))
+      (insert (format "Available %s episodes for: %s\n\n" mode (plist-get show :name)))
       (insert (mapconcat #'number-to-string episodes "\n"))
       (goto-char (point-min))
       (read-only-mode 1)
