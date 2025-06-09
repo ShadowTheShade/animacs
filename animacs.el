@@ -20,6 +20,26 @@
 (defconst animacs-allanime-base "allanime.day")
 (defconst animacs-allanime-api (concat "https://api." animacs-allanime-base "/api"))
 
+(defcustom animacs-mode "sub"
+  "Translation type to request: “sub” or “dub”."
+  :type '(choice (const “sub”) (const “dub”))
+  :group 'animacs)
+
+(defcustom animacs-download-directory default-directory
+  "Directory in which downloaded episodes will be stored."
+  :type 'directory
+  :group 'animacs)
+
+(defcustom animacs-log-episodes t
+  "If non-nil, record each watched episode in the history log."
+  :type 'boolean
+  :group 'animacs)
+
+(defcustom animacs-quality "best"
+  "Preferred video quality string to pass to the player."
+  :type 'string
+  :group 'animacs)
+
 (defun animacs-generate-search-variables (query mode)
   (json-encode
    `(("search" . (("allowAdult" . :json-false)
