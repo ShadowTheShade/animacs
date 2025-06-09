@@ -14,13 +14,13 @@
   "Select and watch anime within Emacs."
   :group 'multimedia)
 
-(defconst allanime-agent
+(defconst animacs-allanime-agent
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0")
-(defconst allanime-refr "https://allmanga.to")
-(defconst allanime-base "allanime.day")
-(defconst allanime-api (concat "https://api." allanime-base "/api"))
+(defconst animacs-allanime-refr "https://allmanga.to")
+(defconst animacs-allanime-base "allanime.day")
+(defconst animacs-allanime-api (concat "https://api." animacs-allanime-base "/api"))
 
-(defun generate-search-variables (query mode)
+(defun animacs-generate-search-variables (query mode)
   (json-encode
    `(("search" . (("allowAdult" . :json-false)
                   ("allowUnknown" . :json-false)
@@ -30,13 +30,13 @@
      ("translationType" . ,mode)
      ("countryOrigin" . "ALL"))))
 
-(defun generate-api-url (search-gql variables)
+(defun animacs-generate-api-url (search-gql variables)
   (format "%s?query=%s&variables=%s"
-          allanime-api
+          animacs-allanime-api
           (url-hexify-string search-gql)
           (url-hexify-string variables)))
 
-(defconst search-anime-gql
+(defconst animacs-search-anime-gql
   "query ($search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) {
      shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) {
        edges {
@@ -46,20 +46,20 @@
    }"
   )
 
-(defun search-anime (query mode)
+(defun animacs-search-anime (query mode)
   "Search AllAnime using QUERY string and MODE (e.g., \"sub\" or \"dub\")."
-  (let* ((search-gql   search-anime-gql)
-         (variables    (generate-search-variables query mode))
-         (url          (generate-api-url search-gql variables))
+  (let* ((search-gql   animacs-search-anime-gql)
+         (variables    (animacs-generate-search-variables query mode))
+         (url          (animacs-generate-api-url search-gql variables))
          (response     (plz 'get url
-			 :headers `(("User-Agent" . ,allanime-agent)
-                                    ("Referer" . ,allanime-refr))
+			 :headers `(("User-Agent" . ,animacs-allanime-agent)
+                                    ("Referer" . ,animacs-allanime-refr))
 			 :decode 'json))
 	 (hashed-data  (json-parse-string response))
 	 (hashed-shows (gethash "edges" (gethash "shows" (gethash "data" hashed-data)))))
     hashed-shows))
 
-(defun build-anime-completion-table (shows)
+(defun animacs-build-anime-completion-table (shows)
   "Return an alist of (display-string . show-hash) for completion."
   (mapcar (lambda (show)
             (cons (format "%s [sub: %d | dub: %d]"
@@ -69,25 +69,25 @@
                   show))
           shows))
 
-(defconst episodes-gql
+(defconst animacs-episodes-gql
   "query ($showId: String!) {
      show(_id: $showId) {
        _id availableEpisodesDetail
      }
    }")
 
-(defun generate-episodes-url (show-id)
+(defun animacs-generate-episodes-url (show-id)
   (format "%s?query=%s&variables=%s"
-          allanime-api
-          (url-hexify-string episodes-gql)
+          animacs-allanime-api
+          (url-hexify-string animacs-episodes-gql)
           (url-hexify-string (json-encode `(("showId" . ,show-id))))))
 
-(defun fetch-episode-list (show-id mode)
+(defun animacs-fetch-episode-list (show-id mode)
   "Return sorted list of episode numbers for SHOW-ID in MODE (\"sub\" or \"dub\")."
-  (let* ((url             (generate-episodes-url show-id))
+  (let* ((url             (animacs-generate-episodes-url show-id))
          (response        (plz 'get url
-			    :headers `(("User-Agent" . ,allanime-agent)
-                                       ("Referer" . ,allanime-refr))
+			    :headers `(("User-Agent" . ,animacs-allanime-agent)
+                                       ("Referer" . ,animacs-allanime-refr))
 			    :decode 'json))
 	 (hashed-response (json-parse-string response))
          (detail          (gethash "availableEpisodesDetail"
@@ -96,17 +96,17 @@
          (episodes        (gethash mode detail)))
     (sort (mapcar #'string-to-number (append episodes nil)) #'<)))
 
-(defun select-and-show-episodes ()
+(defun animacs-select-and-show-episodes ()
   "Interactively select a show and display its available episodes."
   (interactive)
   (let* ((query            (read-string "Search query: "))
          (mode             (completing-read "Mode: " '("sub" "dub") nil t))
-         (shows            (search-anime query mode))
-         (completion-table (build-anime-completion-table shows))
+         (shows            (animacs-search-anime query mode))
+         (completion-table (animacs-build-anime-completion-table shows))
          (selected         (completing-read "Select a show: " completion-table nil t))
          (show             (cdr (assoc selected completion-table)))
          (show-id          (gethash "_id" show))
-         (episodes         (fetch-episode-list show-id mode)))
+         (episodes         (animacs-fetch-episode-list show-id mode)))
     (with-current-buffer (get-buffer-create "*Animacs Episodes*")
       (read-only-mode -1)
       (erase-buffer)
