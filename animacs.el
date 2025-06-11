@@ -73,9 +73,9 @@
          (vars       (animacs-generate-search-variables query mode))
          (url        (animacs-generate-api-url search-gql vars))
          (response   (plz 'get url
-                          :headers `(("User-Agent" . ,animacs-allanime-agent)
-                                     ("Referer"    . ,animacs-allanime-refr))
-                          :decode 'json))
+                       :headers `(("User-Agent" . ,animacs-allanime-agent)
+                                  ("Referer"    . ,animacs-allanime-refr))
+                       :decode 'json))
          (data       (json-parse-string response))
          (edges      (gethash "edges" (gethash "shows" (gethash "data" data)))))
     ;; Return a list of plists for easy downstream use:
@@ -104,15 +104,16 @@ SHOWS is a list of plists with keys :id, :title and :available-episodes."
      }
    }")
 
-(defun animacs-generate-episodes-url (show-id)
+(defun animacs-generate-episode-list-url (show-id)
+  "Format URL to fetch a list of episodes for the given show."
   (format "%s?query=%s&variables=%s"
           animacs-allanime-api
           (url-hexify-string animacs-episodes-gql)
           (url-hexify-string (json-encode `(("showId" . ,show-id))))))
 
-(defun animacs-fetch-episode-list (show-id mode)
+(defun animacs-fetch-episode-list (show-id)
   "Return sorted list of episode numbers for SHOW-ID in MODE (\"sub\" or \"dub\")."
-  (let* ((url             (animacs-generate-episodes-url show-id))
+  (let* ((url             (animacs-generate-episode-list-url show-id))
          (response        (plz 'get url
 			    :headers `(("User-Agent" . ,animacs-allanime-agent)
                                        ("Referer" . ,animacs-allanime-refr))
@@ -121,28 +122,50 @@ SHOWS is a list of plists with keys :id, :title and :available-episodes."
          (detail          (gethash "availableEpisodesDetail"
 				   (gethash "show"
 					    (gethash "data" hashed-response))))
-         (episodes        (gethash mode detail)))
+         (episodes        (gethash animacs-mode detail)))
     (sort (mapcar #'string-to-number (append episodes nil)) #'<)))
 
+(defconst animacs-episode-url-gql
+  "query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+     episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
+       episodeString sourceUrls
+     }
+   }")
+
+(defun animacs-generate-episode-url (show-id ep-num)
+  "Format URL to fetch episode streaming URLs."
+  (format "%s?query=%s&variables=%s"
+	  animacs-allanime-api
+          (url-hexify-string animacs-episode-url-gql)
+          (url-hexify-string (json-encode `(("showId" . ,show-id)
+					    ("translationType" . ,animacs-mode)
+					    ("episodeString" . ,(format "%s" ep-num)))))))
+
+(defun animacs-fetch-episode (show-id ep-num)
+  "Fetch episode streaming information."
+  (let* ((url             (animacs-generate-episode-url show-id ep-num))
+         (response        (plz 'get url
+			    :headers `(("User-Agent" . ,animacs-allanime-agent)
+                                       ("Referer" . ,animacs-allanime-refr))
+			    :decode 'json))
+	 )
+    response))
+
 (defun animacs-select-and-show-episodes ()
-  "Interactively select a show and display its available episodes."
+  "Interactively select a show, then pick an episode from the minibuffer."
   (interactive)
   (let* ((query            (read-string "Search query: "))
-         (mode             (completing-read "Mode: " '("sub" "dub") nil t))
          (shows            (animacs-search-anime query))
          (completion-table (animacs-build-anime-completion-table shows))
-         (selected         (completing-read "Select a show: " completion-table nil t))
-         (show             (cdr (assoc selected completion-table)))
+         (selected-show    (completing-read "Select a show: " completion-table nil t))
+         (show             (cdr (assoc selected-show completion-table)))
          (show-id          (plist-get show :id))
-         (episodes         (animacs-fetch-episode-list show-id mode)))
-    (with-current-buffer (get-buffer-create "*Animacs Episodes*")
-      (read-only-mode -1)
-      (erase-buffer)
-      (insert (format "Available %s episodes for: %s\n\n" mode (plist-get show :name)))
-      (insert (mapconcat #'number-to-string episodes "\n"))
-      (goto-char (point-min))
-      (read-only-mode 1)
-      (display-buffer (current-buffer)))))
+         (episodes         (animacs-fetch-episode-list show-id))
+         (episode-strs     (mapcar #'number-to-string episodes))
+         (ep-num           (string-to-number
+                            (completing-read "Select episode: " episode-strs nil t)))
+	 (episode          (animacs-fetch-episode show-id ep-num)))
+    (message "%s" episode)))
 
 (provide 'animacs)
 
