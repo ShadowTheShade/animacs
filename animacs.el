@@ -73,9 +73,9 @@
          (vars       (animacs-generate-search-variables query mode))
          (url        (animacs-generate-api-url search-gql vars))
          (response   (plz 'get url
-                       :headers `(("User-Agent" . ,animacs-allanime-agent)
+		       :headers `(("User-Agent" . ,animacs-allanime-agent)
                                   ("Referer"    . ,animacs-allanime-refr))
-                       :decode 'json))
+		       :decode 'json))
          (data       (json-parse-string response))
          (edges      (gethash "edges" (gethash "shows" (gethash "data" data)))))
     ;; Return a list of plists for easy downstream use:
@@ -116,7 +116,7 @@ SHOWS is a list of plists with keys :id, :title and :available-episodes."
   (let* ((url             (animacs-generate-episode-list-url show-id))
          (response        (plz 'get url
 			    :headers `(("User-Agent" . ,animacs-allanime-agent)
-                                       ("Referer" . ,animacs-allanime-refr))
+				       ("Referer" . ,animacs-allanime-refr))
 			    :decode 'json))
 	 (hashed-response (json-parse-string response))
          (detail          (gethash "availableEpisodesDetail"
@@ -146,10 +146,85 @@ SHOWS is a list of plists with keys :id, :title and :available-episodes."
   (let* ((url             (animacs-generate-episode-url show-id ep-num))
          (response        (plz 'get url
 			    :headers `(("User-Agent" . ,animacs-allanime-agent)
-                                       ("Referer" . ,animacs-allanime-refr))
-			    :decode 'json))
-	 )
+				       ("Referer" . ,animacs-allanime-refr))
+			    :decode 'json)))
     response))
+
+(defun animacs-extract-encrypted-sources (episode-json)
+  "Return every \"sourceName :ENCRYPTED\" pair whose sourceUrl starts with \"--\"
+from the AllAnime episode JSON in EPISODE-JSON."
+  (let* ((root (json-parse-string episode-json
+                                  :object-type 'alist  ; easier key lookup
+                                  :array-type  'list))
+         (urls (alist-get 'sourceUrls
+                          (alist-get 'episode
+                                     (alist-get 'data root)))))
+    (seq-filter
+     #'identity
+     (mapcar (lambda (entry)
+               (let ((url  (alist-get 'sourceUrl entry))
+                     (name (alist-get 'sourceName entry)))
+                 (when (and url name (string-prefix-p "--" url))
+                   (format "%s :%s" name (substring url 2)))))
+             urls))))
+
+(defun animacs-find-first-line (lines pattern)
+  "Return the first element of LINES that matches PATTERN, or nil if none."
+  (seq-find (lambda (line) (string-match-p pattern line))
+            lines))
+
+(defun animacs-provider-lines-plist (lines)
+  "Return a plist keyed by provider names → first matching LINE."
+  (list
+   :wixmp      (animacs-find-first-line lines "Default :")
+   :youtube    (animacs-find-first-line lines "Yt-mp4 :")
+   :sharepoint (animacs-find-first-line lines "S-mp4 :")
+   :hianime    (animacs-find-first-line lines "Luf-Mp4 :")))
+
+(defconst animacs--hex->char-alist
+  '(("79" . "A") ("7a" . "B") ("7b" . "C") ("7c" . "D") ("7d" . "E") ("7e" . "F") ("7f" . "G")
+    ("70" . "H") ("71" . "I") ("72" . "J") ("73" . "K") ("74" . "L") ("75" . "M") ("76" . "N") ("77" . "O")
+    ("68" . "P") ("69" . "Q") ("6a" . "R") ("6b" . "S") ("6c" . "T") ("6d" . "U") ("6e" . "V") ("6f" . "W")
+    ("60" . "X") ("61" . "Y") ("62" . "Z")
+    ("59" . "a") ("5a" . "b") ("5b" . "c") ("5c" . "d") ("5d" . "e") ("5e" . "f") ("5f" . "g")
+    ("50" . "h") ("51" . "i") ("52" . "j") ("53" . "k") ("54" . "l") ("55" . "m") ("56" . "n") ("57" . "o")
+    ("48" . "p") ("49" . "q") ("4a" . "r") ("4b" . "s") ("4c" . "t") ("4d" . "u") ("4e" . "v") ("4f" . "w")
+    ("40" . "x") ("41" . "y") ("42" . "z")
+    ("08" . "0") ("09" . "1") ("0a" . "2") ("0b" . "3") ("0c" . "4") ("0d" . "5") ("0e" . "6") ("0f" . "7")
+    ("00" . "8") ("01" . "9")
+    ("15" . "-") ("16" . ".") ("67" . "_") ("46" . "~")
+    ("02" . ":") ("17" . "/") ("07" . "?") ("1b" . "#") ("63" . "[") ("65" . "]") ("78" . "@")
+    ("19" . "!") ("1c" . "$") ("1e" . "&")
+    ("10" . "(") ("11" . ")") ("12" . "*") ("13" . "+") ("14" . ",") ("03" . ";") ("05" . "=") ("1d" . "%"))
+  "Hex-pair -> character map used by AllAnime provider links.")
+
+(defvar animacs--hex->char-table
+  (let ((tbl (make-hash-table :test 'equal)))
+    (dolist (p animacs--hex->char-alist)
+      (puthash (car p) (cdr p) tbl))
+    tbl)
+  "Same map, but as a hash-table for O(1) lookup.")
+
+(defun animacs--decode-hexblob (hex)
+  "Translate HEX into the suitable provider URL."
+  (let* ((chars (cl-loop for i from 0 below (length hex) by 2
+                         for code = (substring hex i (+ i 2))
+                         for ch   = (gethash code animacs--hex->char-table "")
+                         collect ch))
+         (decoded (apply #'concat chars)))
+    (replace-regexp-in-string "/clock\\b" "/clock.json" decoded)))
+
+(defun animacs--decode-line (line)
+  "Given \"name :HEX\", return the decoded URL or nil."
+  (when (and line (string-match ":" line))
+    (animacs--decode-hexblob
+     (string-trim (substring line (1+ (match-beginning 0)))))))
+
+(defun animacs-decode-provider-plist (provider-lines-plist)
+  "Return a *new* plist where each value is the decoded provider URL."
+  (cl-loop for (key raw) on provider-lines-plist by #'cddr
+           nconc (list key (animacs--decode-line raw))))
+
 
 (defun animacs-select-and-show-episodes ()
   "Interactively select a show, then pick an episode from the minibuffer."
@@ -164,8 +239,11 @@ SHOWS is a list of plists with keys :id, :title and :available-episodes."
          (episode-strs     (mapcar #'number-to-string episodes))
          (ep-num           (string-to-number
                             (completing-read "Select episode: " episode-strs nil t)))
-	 (episode          (animacs-fetch-episode show-id ep-num)))
-    (message "%s" episode)))
+	 (episode          (animacs-fetch-episode show-id ep-num))
+	 (candidate-urls   (animacs-extract-encrypted-sources episode))
+	 (provider-lines   (animacs-provider-lines-plist candidate-urls))
+	 (provider-urls    (animacs-decode-provider-plist provider-lines)))
+    (message "%s" provider-urls)))
 
 (provide 'animacs)
 
