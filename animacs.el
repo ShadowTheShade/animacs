@@ -78,7 +78,6 @@
 		       :decode 'json))
          (data       (json-parse-string response))
          (edges      (gethash "edges" (gethash "shows" (gethash "data" data)))))
-    ;; Return a list of plists for easy downstream use:
     (mapcar (lambda (ht)
               (list :id                 (gethash "_id" ht)
                     :title              (gethash "name" ht)
@@ -174,12 +173,13 @@ from the AllAnime episode JSON in EPISODE-JSON."
             lines))
 
 (defun animacs-provider-lines-plist (lines)
-  "Return a plist keyed by provider names → first matching LINE."
+  "Return a plist keyed by provider names -> first matching LINE."
   (list
    :wixmp      (animacs-find-first-line lines "Default :")
-   :youtube    (animacs-find-first-line lines "Yt-mp4 :")
+   ;; :youtube    (animacs-find-first-line lines "Yt-mp4 :")
    :sharepoint (animacs-find-first-line lines "S-mp4 :")
-   :hianime    (animacs-find-first-line lines "Luf-Mp4 :")))
+   ;; :hianime    (animacs-find-first-line lines "Luf-Mp4 :")
+   ))
 
 (defconst animacs--hex->char-alist
   '(("79" . "A") ("7a" . "B") ("7b" . "C") ("7c" . "D") ("7d" . "E") ("7e" . "F") ("7f" . "G")
@@ -225,6 +225,37 @@ from the AllAnime episode JSON in EPISODE-JSON."
   (cl-loop for (key raw) on provider-lines-plist by #'cddr
            nconc (list key (animacs--decode-line raw))))
 
+(defun animacs-generate-fetch-video-url (provider-id)
+  "Format URL to fetch episode video URLs."
+  (concat "https://" animacs-allanime-base provider-id))
+
+(defun animacs-fetch-video-streams (provider-id)
+  "Fetch episode streaming information."
+  (let* ((url             (animacs-generate-fetch-video-url provider-id))
+         (response        (plz 'get url
+			    :headers `(("User-Agent" . ,animacs-allanime-agent)
+				       ("Referer" . ,animacs-allanime-refr))
+			    :decode 'json)))
+    response))
+
+(defun animacs-extract-link-from-json (json-str)
+  "Given JSON-STR like '{\"links\":[{\"link\":\"URL\",…}]}',
+return the first \"link\" value, or nil if not found."
+  (let* ((data  (json-parse-string json-str
+                                   :object-type 'alist
+                                   :array-type  'list))
+         (links (alist-get 'links data)))
+    (when (and (listp links)
+               (alist-get 'link (car links)))
+      (alist-get 'link (car links)))))
+
+
+(defun animacs-fetch-video-streams-plist (provider-plist)
+  "Given PROVIDER-PLIST mapping provider keys to decoded provider-IDs,
+fetch each episode’s streaming JSON via `animacs-fetch-video-streams`
+and return a new plist with the same keys mapped to the JSON results."
+  (cl-loop for (key provider-id) on provider-plist by #'cddr
+           nconc (list key (animacs-extract-link-from-json (animacs-fetch-video-streams provider-id)))))
 
 (defun animacs-select-and-show-episodes ()
   "Interactively select a show, then pick an episode from the minibuffer."
@@ -242,8 +273,9 @@ from the AllAnime episode JSON in EPISODE-JSON."
 	 (episode          (animacs-fetch-episode show-id ep-num))
 	 (candidate-urls   (animacs-extract-encrypted-sources episode))
 	 (provider-lines   (animacs-provider-lines-plist candidate-urls))
-	 (provider-urls    (animacs-decode-provider-plist provider-lines)))
-    (message "%s" provider-urls)))
+	 (provider-urls    (animacs-decode-provider-plist provider-lines))
+	 (episode-videos   (animacs-fetch-video-streams-plist provider-urls)))
+    (message "%s" episode-videos)))
 
 (provide 'animacs)
 
