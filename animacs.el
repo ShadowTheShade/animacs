@@ -257,7 +257,22 @@ and return a new plist with the same keys mapped to the JSON results."
   (cl-loop for (key provider-id) on provider-plist by #'cddr
            nconc (list key (animacs-extract-link-from-json (animacs-fetch-video-streams provider-id)))))
 
-(defun animacs-select-and-show-episodes ()
+
+(defun animacs-mpv-play (url &optional extra-args)
+  "Play the given URL in mpv asynchronously.
+   EXTRA-ARGS is a list of additional mpv command-line flags."
+  (let ((mpv-bin (or (executable-find "mpv")
+                     (error "Could not find mpv in your PATH"))))
+    (start-process
+     "animacs-mpv"
+     "*animacs-mpv*"
+     mpv-bin
+
+     "--no-terminal"
+
+     url)))
+
+(defun animacs-select-and-play-episode ()
   "Interactively select a show, then pick an episode from the minibuffer."
   (interactive)
   (let* ((query            (read-string "Search query: "))
@@ -275,7 +290,7 @@ and return a new plist with the same keys mapped to the JSON results."
 	 (provider-lines   (animacs-provider-lines-plist candidate-urls))
 	 (provider-urls    (animacs-decode-provider-plist provider-lines))
 	 (episode-videos   (animacs-fetch-video-streams-plist provider-urls)))
-    (message "%s" episode-videos)))
+    (animacs-mpv-play (plist-get episode-videos ':wixmp))))
 
 (provide 'animacs)
 
