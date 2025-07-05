@@ -40,6 +40,11 @@
   :type 'string
   :group 'animacs)
 
+(defcustom animacs-provider-preference '(:wixmp :sharepoint)
+  "List of preferred providers to try in order."
+  :type '(repeat keyword)
+  :group 'animacs)
+
 (defconst animacs-search-anime-gql
   "query ($search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) {
      shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) {
@@ -50,7 +55,7 @@
    }"
   )
 
-(defun animacs-generate-search-variables (query mode)
+(defun animacs--generate-search-variables (query mode)
   (json-encode
    `(("search" . (("allowAdult" . :json-false)
                   ("allowUnknown" . :json-false)
@@ -60,7 +65,7 @@
      ("translationType" . ,mode)
      ("countryOrigin" . "ALL"))))
 
-(defun animacs-generate-api-url (search-gql variables)
+(defun animacs--generate-api-url (search-gql variables)
   (format "%s?query=%s&variables=%s"
           animacs-allanime-api
           (url-hexify-string search-gql)
@@ -70,8 +75,8 @@
   "Search AllAnime for QUERY, using the user’s `animacs-mode`."
   (let* ((mode       animacs-mode)
          (search-gql animacs-search-anime-gql)
-         (vars       (animacs-generate-search-variables query mode))
-         (url        (animacs-generate-api-url search-gql vars))
+         (vars       (animacs--generate-search-variables query mode))
+         (url        (animacs--generate-api-url search-gql vars))
          (response   (plz 'get url
 		       :headers `(("User-Agent" . ,animacs-allanime-agent)
                                   ("Referer"    . ,animacs-allanime-refr))
@@ -81,11 +86,11 @@
     (mapcar (lambda (ht)
               (list :id                 (gethash "_id" ht)
                     :title              (gethash "name" ht)
-                    :available-episodes (gethash (if (string= mode "dub") "dub" "sub")
+                    :available-episodes (gethash mode
                                                  (gethash "availableEpisodes" ht))))
             edges)))
 
-(defun animacs-build-anime-completion-table (shows)
+(defun animacs--build-anime-completion-table (shows)
   "Return an alist of (DISPLAY . show-plist) for completion.
 SHOWS is a list of plists with keys :id, :title and :available-episodes."
   (mapcar (lambda (show)
@@ -103,7 +108,7 @@ SHOWS is a list of plists with keys :id, :title and :available-episodes."
      }
    }")
 
-(defun animacs-generate-episode-list-url (show-id)
+(defun animacs--generate-episode-list-url (show-id)
   "Format URL to fetch a list of episodes for the given show."
   (format "%s?query=%s&variables=%s"
           animacs-allanime-api
@@ -112,7 +117,7 @@ SHOWS is a list of plists with keys :id, :title and :available-episodes."
 
 (defun animacs-fetch-episode-list (show-id)
   "Return sorted list of episode numbers for SHOW-ID in MODE (\"sub\" or \"dub\")."
-  (let* ((url             (animacs-generate-episode-list-url show-id))
+  (let* ((url             (animacs--generate-episode-list-url show-id))
          (response        (plz 'get url
 			    :headers `(("User-Agent" . ,animacs-allanime-agent)
 				       ("Referer" . ,animacs-allanime-refr))
@@ -131,7 +136,7 @@ SHOWS is a list of plists with keys :id, :title and :available-episodes."
      }
    }")
 
-(defun animacs-generate-episode-url (show-id ep-num)
+(defun animacs--generate-episode-url (show-id ep-num)
   "Format URL to fetch episode streaming URLs."
   (format "%s?query=%s&variables=%s"
 	  animacs-allanime-api
@@ -142,14 +147,14 @@ SHOWS is a list of plists with keys :id, :title and :available-episodes."
 
 (defun animacs-fetch-episode (show-id ep-num)
   "Fetch episode streaming information."
-  (let* ((url             (animacs-generate-episode-url show-id ep-num))
+  (let* ((url             (animacs--generate-episode-url show-id ep-num))
          (response        (plz 'get url
 			    :headers `(("User-Agent" . ,animacs-allanime-agent)
 				       ("Referer" . ,animacs-allanime-refr))
 			    :decode 'json)))
     response))
 
-(defun animacs-extract-encrypted-sources (episode-json)
+(defun animacs--extract-encrypted-sources (episode-json)
   "Return every \"sourceName :ENCRYPTED\" pair whose sourceUrl starts with \"--\"
 from the AllAnime episode JSON in EPISODE-JSON."
   (let* ((root (json-parse-string episode-json
@@ -167,17 +172,17 @@ from the AllAnime episode JSON in EPISODE-JSON."
                    (format "%s :%s" name (substring url 2)))))
              urls))))
 
-(defun animacs-find-first-line (lines pattern)
+(defun animacs--find-first-line (lines pattern)
   "Return the first element of LINES that matches PATTERN, or nil if none."
   (seq-find (lambda (line) (string-match-p pattern line))
             lines))
 
-(defun animacs-provider-lines-plist (lines)
+(defun animacs--provider-lines-plist (lines)
   "Return a plist keyed by provider names -> first matching LINE."
   (list
-   :wixmp      (animacs-find-first-line lines "Default :")
+   :wixmp      (animacs--find-first-line lines "Default :")
    ;; :youtube    (animacs-find-first-line lines "Yt-mp4 :")
-   :sharepoint (animacs-find-first-line lines "S-mp4 :")
+   :sharepoint (animacs--find-first-line lines "S-mp4 :")
    ;; :hianime    (animacs-find-first-line lines "Luf-Mp4 :")
    ))
 
@@ -220,42 +225,47 @@ from the AllAnime episode JSON in EPISODE-JSON."
     (animacs--decode-hexblob
      (string-trim (substring line (1+ (match-beginning 0)))))))
 
-(defun animacs-decode-provider-plist (provider-lines-plist)
+(defun animacs--decode-provider-plist (provider-lines-plist)
   "Return a *new* plist where each value is the decoded provider URL."
   (cl-loop for (key raw) on provider-lines-plist by #'cddr
            nconc (list key (animacs--decode-line raw))))
 
-(defun animacs-generate-fetch-video-url (provider-id)
+(defun animacs--generate-fetch-video-url (provider-id)
   "Format URL to fetch episode video URLs."
   (concat "https://" animacs-allanime-base provider-id))
 
-(defun animacs-fetch-video-streams (provider-id)
+(defun animacs--fetch-video-streams (provider-id)
   "Fetch episode streaming information."
-  (let* ((url             (animacs-generate-fetch-video-url provider-id))
+  (let* ((url             (animacs--generate-fetch-video-url provider-id))
          (response        (plz 'get url
 			    :headers `(("User-Agent" . ,animacs-allanime-agent)
 				       ("Referer" . ,animacs-allanime-refr))
 			    :decode 'json)))
     response))
 
-(defun animacs-extract-link-from-json (json-str)
-  "Given JSON-STR like '{\"links\":[{\"link\":\"URL\",…}]}',
-return the first \"link\" value, or nil if not found."
-  (let* ((data  (json-parse-string json-str
-                                   :object-type 'alist
-                                   :array-type  'list))
+(defun animacs--get-resolution (link-alist)
+  "Extract resolution as integer from a link alist."
+  (let ((res-str (alist-get 'resolutionStr link-alist)))
+    (when (and res-str (string-match "\\([0-9]+\\)" res-str))
+      (string-to-number (match-string 1 res-str)))))
+
+(defun animacs--select-stream-url (json-str quality)
+  "Select a stream URL from JSON-STR based on QUALITY.
+QUALITY can be \"best\" or a specific resolution like \"720p\".
+Assumes the JSON contains a \"links\" key with a list of objects,
+each having \"link\" and \"resolutionStr\" keys."
+  (let* ((data  (json-parse-string json-str :object-type 'alist :array-type 'list))
          (links (alist-get 'links data)))
-    (when (and (listp links)
-               (alist-get 'link (car links)))
-      (alist-get 'link (car links)))))
-
-
-(defun animacs-fetch-video-streams-plist (provider-plist)
-  "Given PROVIDER-PLIST mapping provider keys to decoded provider-IDs,
-fetch each episode’s streaming JSON via `animacs-fetch-video-streams`
-and return a new plist with the same keys mapped to the JSON results."
-  (cl-loop for (key provider-id) on provider-plist by #'cddr
-           nconc (list key (animacs-extract-link-from-json (animacs-fetch-video-streams provider-id)))))
+    (when links
+      (if (string= quality "best")
+          ;; Find the link with the highest resolution
+          (let* ((sorted-links (sort links (lambda (a b)
+                                             (> (or (animacs--get-resolution a) 0)
+                                                (or (animacs--get-resolution b) 0))))))
+            (alist-get 'link (car sorted-links)))
+        ;; Find the link with the matching resolution string
+        (alist-get 'link (seq-find (lambda (l) (string-equal quality (alist-get 'resolutionStr l)))
+                                   links))))))
 
 
 (defun animacs-mpv-play (url &optional extra-args)
@@ -277,7 +287,7 @@ and return a new plist with the same keys mapped to the JSON results."
   (interactive)
   (let* ((query            (read-string "Search query: "))
          (shows            (animacs-search-anime query))
-         (completion-table (animacs-build-anime-completion-table shows))
+         (completion-table (animacs--build-anime-completion-table shows))
          (selected-show    (completing-read "Select a show: " completion-table nil t))
          (show             (cdr (assoc selected-show completion-table)))
          (show-id          (plist-get show :id))
@@ -286,11 +296,21 @@ and return a new plist with the same keys mapped to the JSON results."
          (ep-num           (string-to-number
                             (completing-read "Select episode: " episode-strs nil t)))
 	 (episode          (animacs-fetch-episode show-id ep-num))
-	 (candidate-urls   (animacs-extract-encrypted-sources episode))
-	 (provider-lines   (animacs-provider-lines-plist candidate-urls))
-	 (provider-urls    (animacs-decode-provider-plist provider-lines))
-	 (episode-videos   (animacs-fetch-video-streams-plist provider-urls)))
-    (animacs-mpv-play (plist-get episode-videos ':wixmp))))
+	 (candidate-urls   (animacs--extract-encrypted-sources episode))
+	 (provider-lines   (animacs--provider-lines-plist candidate-urls))
+	 (provider-urls    (animacs--decode-provider-plist provider-lines))
+         (stream-url
+          (catch 'found
+            (dolist (provider animacs-provider-preference)
+              (when-let ((provider-id (plist-get provider-urls provider)))
+                (let* ((streams-json (animacs--fetch-video-streams provider-id))
+                       (url (and streams-json
+                                 (animacs--select-stream-url streams-json animacs-quality))))
+                  (when url
+                    (throw 'found url))))))))
+    (if stream-url
+        (animacs-mpv-play stream-url)
+      (message "Could not find a playable stream for the selected episode."))))
 
 (provide 'animacs)
 
