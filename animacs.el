@@ -40,10 +40,23 @@
   :type 'string
   :group 'animacs)
 
+(defcustom animacs-mpv-arguments '("--no-terminal")
+  "List of arguments to pass to the mpv player."
+  :type '(repeat string)
+  :group 'animacs)
+
 (defcustom animacs-provider-preference '(:wixmp :sharepoint)
   "List of preferred providers to try in order."
   :type '(repeat keyword)
   :group 'animacs)
+
+(defcustom animacs-history-file (locate-user-emacs-file "animacs-history.json")
+  "File where viewing history is stored."
+  :type 'file
+  :group 'animacs)
+
+(defvar animacs-history nil
+  "A master plist holding all show histories, e.g., '(:shows [...]).")
 
 (defconst animacs-search-anime-gql
   "query ($search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) {
@@ -267,20 +280,71 @@ each having \"link\" and \"resolutionStr\" keys."
         (alist-get 'link (seq-find (lambda (l) (string-equal quality (alist-get 'resolutionStr l)))
                                    links))))))
 
+(defun animacs--load-history ()
+  "Load watch history from `animacs-history-file` into a master plist.
+Initializes history to '(:shows []) if the file does not exist."
+  (setq animacs-history
+        (if (file-exists-p animacs-history-file)
+            (with-temp-buffer
+              (insert-file-contents animacs-history-file)
+              (goto-char (point-min))
+              (let ((json-object-type 'plist)
+                    (json-array-type 'vector)
+                    (json-key-type 'symbol))
+                (json-read)))
+          '(:shows []))))
+
+(defun animacs--save-history ()
+  "Save the current `animacs-history` master plist to its file."
+  (when animacs-history
+    (with-temp-file animacs-history-file
+      (json-insert animacs-history))))
+
+(defun animacs--log-episode (show episode-number)
+  "Log that EPISODE-NUMBER of SHOW was watched.
+Updates `animacs-history` and saves it to disk."
+  (when animacs-log-episodes
+    (unless animacs-history (animacs--load-history))
+
+    (let* ((title (plist-get show :title))
+           (timestamp (format-time-string "%Y-%m-%d %H:%M:%S"))
+           (new-episode-plist `(:episode ,episode-number :timestamp ,timestamp))
+           (shows-vec (plist-get animacs-history :shows))
+           (show-entry (seq-find (lambda (s) (string= title (plist-get s :title)))
+                                 shows-vec)))
+      (if show-entry
+          ;; --- Show exists: update it ---
+          (let* ((episodes-vec (plist-get show-entry :episodes))
+                 ;; Filter out old entry for this episode, if it exists (to update timestamp).
+                 (filtered-episodes (seq-filter (lambda (ep) (/= episode-number (plist-get ep :episode)))
+                                                episodes-vec))
+                 ;; Add the new/updated episode data to a new vector.
+                 (new-episodes-vec (vconcat (vector new-episode-plist) filtered-episodes))
+                 ;; Create an updated show entry.
+                 (new-show-entry (plist-put show-entry :episodes new-episodes-vec))
+                 ;; Create an updated shows vector.
+                 (new-shows-vec (vconcat (vector new-show-entry)
+                                         (seq-filter (lambda (s) (not (eq s show-entry)))
+                                                     shows-vec))))
+            (setq animacs-history (plist-put animacs-history :shows new-shows-vec)))
+        ;; --- Show is new: create a new entry and add it ---
+        (let* ((new-show-entry `(:title ,title :episodes ,(vector new-episode-plist)))
+               (new-shows-vec (vconcat shows-vec (vector new-show-entry))))
+          (setq animacs-history (plist-put animacs-history :shows new-shows-vec))))
+
+      (animacs--save-history))))
+
 
 (defun animacs-mpv-play (url &optional extra-args)
   "Play the given URL in mpv asynchronously.
    EXTRA-ARGS is a list of additional mpv command-line flags."
   (let ((mpv-bin (or (executable-find "mpv")
                      (error "Could not find mpv in your PATH"))))
-    (start-process
-     "animacs-mpv"
-     "*animacs-mpv*"
-     mpv-bin
-
-     "--no-terminal"
-
-     url)))
+    (apply #'start-process
+           "animacs-mpv"
+           "*animacs-mpv*"
+           mpv-bin
+           (append animacs-mpv-arguments extra-args (list url)))))
 
 (defun animacs-select-and-play-episode ()
   "Interactively select a show, then pick an episode from the minibuffer."
@@ -309,8 +373,13 @@ each having \"link\" and \"resolutionStr\" keys."
                   (when url
                     (throw 'found url))))))))
     (if stream-url
-        (animacs-mpv-play stream-url)
+        (progn
+          (animacs--log-episode show ep-num)
+          (animacs-mpv-play stream-url))
       (message "Could not find a playable stream for the selected episode."))))
+
+;; Load history on startup
+(animacs--load-history)
 
 (provide 'animacs)
 
