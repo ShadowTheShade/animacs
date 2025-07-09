@@ -56,7 +56,7 @@
   :group 'animacs)
 
 (defvar animacs-history nil
-  "A master plist holding all show histories, e.g., '(:shows [...]).")
+  "A hash table holding all show histories, mapping titles to episode data.")
 
 (defconst animacs-search-anime-gql
   "query ($search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) {
@@ -281,57 +281,43 @@ each having \"link\" and \"resolutionStr\" keys."
                                    links))))))
 
 (defun animacs--load-history ()
-  "Load watch history from `animacs-history-file` into a master plist.
-Initializes history to '(:shows []) if the file does not exist."
+  "Load watch history from `animacs-history-file` into a hash-table.
+Initializes an empty hash table if the file does not exist or is empty."
   (setq animacs-history
-        (if (file-exists-p animacs-history-file)
+        (if (and (file-exists-p animacs-history-file)
+                 ;; Use (nth 7 (file-attributes ...)) for file size to support older Emacs.
+                 (> (nth 7 (file-attributes animacs-history-file)) 0))
             (with-temp-buffer
               (insert-file-contents animacs-history-file)
-              (goto-char (point-min))
-              (let ((json-object-type 'plist)
-                    (json-array-type 'vector)
-                    (json-key-type 'symbol))
-                (json-read)))
-          '(:shows []))))
+              (let ((json-object-type 'hash-table)
+                    (json-key-type 'string))
+                (json-read-from-string (buffer-string))))
+          (make-hash-table :test 'equal))))
 
 (defun animacs--save-history ()
-  "Save the current `animacs-history` master plist to its file."
+  "Save the current `animacs-history` hash table to its file."
   (when animacs-history
     (with-temp-file animacs-history-file
-      (json-insert animacs-history))))
+      (let ((json-encoding-pretty-print t))
+        (insert (json-encode animacs-history))))))
 
 (defun animacs--log-episode (show episode-number)
-  "Log that EPISODE-NUMBER of SHOW was watched.
-Updates `animacs-history` and saves it to disk."
+  "Log that EPISODE-NUMBER of SHOW was watched with a timestamp.
+SHOW is a plist with :title and :id keys. The history is stored as
+a hash-table mapping titles to another hash-table containing the
+show ID and episode timestamps."
   (when animacs-log-episodes
     (unless animacs-history (animacs--load-history))
 
     (let* ((title (plist-get show :title))
-           (timestamp (format-time-string "%Y-%m-%d %H:%M:%S"))
-           (new-episode-plist `(:episode ,episode-number :timestamp ,timestamp))
-           (shows-vec (plist-get animacs-history :shows))
-           (show-entry (seq-find (lambda (s) (string= title (plist-get s :title)))
-                                 shows-vec)))
-      (if show-entry
-          ;; --- Show exists: update it ---
-          (let* ((episodes-vec (plist-get show-entry :episodes))
-                 ;; Filter out old entry for this episode, if it exists (to update timestamp).
-                 (filtered-episodes (seq-filter (lambda (ep) (/= episode-number (plist-get ep :episode)))
-                                                episodes-vec))
-                 ;; Add the new/updated episode data to a new vector.
-                 (new-episodes-vec (vconcat (vector new-episode-plist) filtered-episodes))
-                 ;; Create an updated show entry.
-                 (new-show-entry (plist-put show-entry :episodes new-episodes-vec))
-                 ;; Create an updated shows vector.
-                 (new-shows-vec (vconcat (vector new-show-entry)
-                                         (seq-filter (lambda (s) (not (eq s show-entry)))
-                                                     shows-vec))))
-            (setq animacs-history (plist-put animacs-history :shows new-shows-vec)))
-        ;; --- Show is new: create a new entry and add it ---
-        (let* ((new-show-entry `(:title ,title :episodes ,(vector new-episode-plist)))
-               (new-shows-vec (vconcat shows-vec (vector new-show-entry))))
-          (setq animacs-history (plist-put animacs-history :shows new-shows-vec))))
-
+           (show-id (plist-get show :id))
+           (show-entry (or (gethash title animacs-history)
+                           (make-hash-table :test 'equal))))
+      (puthash "id" show-id show-entry)
+      (puthash (number-to-string episode-number)
+               (format-time-string "%Y-%m-%dT%H:%M:%S%z")
+               show-entry)
+      (puthash title show-entry animacs-history)
       (animacs--save-history))))
 
 
