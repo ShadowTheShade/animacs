@@ -301,6 +301,39 @@ Initializes an empty hash table if the file does not exist or is empty."
       (let ((json-encoding-pretty-print t))
         (insert (json-encode animacs-history))))))
 
+(defun animacs--find-latest-watched-episode ()
+  "Find the most recently watched episode from history.
+Returns a plist with :title, :id, and :episode-number, or nil if history is empty."
+  (unless animacs-history (animacs--load-history))
+  (let ((all-episodes nil))
+    ;; 1. Collect all episodes from the history into a list of plists.
+    (maphash
+     (lambda (title show-data)
+       (let ((show-id (gethash "id" show-data)))
+         (maphash
+          (lambda (ep-key ep-val)
+            (unless (string= ep-key "id")
+              (push (list :title title
+                          :id show-id
+                          :episode-number (string-to-number ep-key)
+                          :timestamp (parse-time-string ep-val))
+                    all-episodes)))
+          show-data)))
+     animacs-history)
+
+    ;; 2. If episodes were found, sort them by timestamp and return the latest.
+    (when all-episodes
+      (let* ((sorted-episodes
+              (sort all-episodes
+                    (lambda (a b)
+                      (time-less-p (encode-time (plist-get a :timestamp))
+                                   (encode-time (plist-get b :timestamp))))))
+             (latest (car (last sorted-episodes))))
+        ;; Return a new plist without the internal :timestamp key.
+        (list :title (plist-get latest :title)
+              :id (plist-get latest :id)
+              :episode-number (plist-get latest :episode-number))))))
+
 (defun animacs--log-episode (show episode-number)
   "Log that EPISODE-NUMBER of SHOW was watched with a timestamp.
 SHOW is a plist with :title and :id keys. The history is stored as
@@ -320,6 +353,21 @@ show ID and episode timestamps."
       (puthash title show-entry animacs-history)
       (animacs--save-history))))
 
+
+(defun animacs--get-stream-for-episode (show-id ep-num)
+  "Fetch and return a playable stream URL for SHOW-ID and EP-NUM."
+  (let* ((episode        (animacs-fetch-episode show-id ep-num))
+         (candidate-urls (animacs--extract-encrypted-sources episode))
+         (provider-lines (animacs--provider-lines-plist candidate-urls))
+         (provider-urls  (animacs--decode-provider-plist provider-lines)))
+    (catch 'found
+      (dolist (provider animacs-provider-preference)
+        (when-let ((provider-id (plist-get provider-urls provider)))
+          (let* ((streams-json (animacs--fetch-video-streams provider-id))
+                 (url (and streams-json
+                           (animacs--select-stream-url streams-json animacs-quality))))
+            (when url
+              (throw 'found url))))))))
 
 (defun animacs-mpv-play (url &optional extra-args)
   "Play the given URL in mpv asynchronously.
@@ -345,24 +393,32 @@ show ID and episode timestamps."
          (episode-strs     (mapcar #'number-to-string episodes))
          (ep-num           (string-to-number
                             (completing-read "Select episode: " episode-strs nil t)))
-	 (episode          (animacs-fetch-episode show-id ep-num))
-	 (candidate-urls   (animacs--extract-encrypted-sources episode))
-	 (provider-lines   (animacs--provider-lines-plist candidate-urls))
-	 (provider-urls    (animacs--decode-provider-plist provider-lines))
-         (stream-url
-          (catch 'found
-            (dolist (provider animacs-provider-preference)
-              (when-let ((provider-id (plist-get provider-urls provider)))
-                (let* ((streams-json (animacs--fetch-video-streams provider-id))
-                       (url (and streams-json
-                                 (animacs--select-stream-url streams-json animacs-quality))))
-                  (when url
-                    (throw 'found url))))))))
+         (stream-url       (animacs--get-stream-for-episode show-id ep-num)))
     (if stream-url
         (progn
           (animacs--log-episode show ep-num)
           (animacs-mpv-play stream-url))
       (message "Could not find a playable stream for the selected episode."))))
+
+(defun animacs-play-next-episode ()
+  "Play the next episode of the most recently watched show."
+  (interactive)
+  (let ((latest-ep-data (animacs--find-latest-watched-episode)))
+    (if-let ((show-id (plist-get latest-ep-data :id))
+             (last-ep-num (plist-get latest-ep-data :episode-number))
+             (title (plist-get latest-ep-data :title)))
+        (let* ((all-episodes (animacs-fetch-episode-list show-id))
+               (next-ep-num (seq-find (lambda (ep) (> ep last-ep-num)) all-episodes)))
+          (if next-ep-num
+              (progn
+                (message "Playing episode %s of %s..." next-ep-num title)
+                (if-let ((stream-url (animacs--get-stream-for-episode show-id next-ep-num)))
+                    (let ((show-plist (list :id show-id :title title)))
+                      (animacs--log-episode show-plist next-ep-num)
+                      (animacs-mpv-play stream-url))
+                  (message "Could not find a playable stream for episode %s." next-ep-num)))
+            (message "No next episode found for %s." title)))
+      (message "No watch history found."))))
 
 ;; Load history on startup
 (animacs--load-history)
