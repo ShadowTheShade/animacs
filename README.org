@@ -1,4 +1,81 @@
-#+TITLE: animacs
-#+DESCRIPTION: a GNU Emacs package for browsing and watching anime
+#+TITLE: Animacs
 #+AUTHOR: Anthony Gagliano
 #+EMAIL: antogagliano3@gmail.com
+#+DESCRIPTION: An Emacs client for searching and watching anime.
+
+* Animacs
+
+An Emacs client for searching and watching anime directly from your editor, powered by the AllAnime API.
+
+* Features
+
+- Search for anime titles.
+- Select and play episodes.
+- Automatic watch history tracking.
+- Play the next episode of the last watched series.
+- Streams are played externally using =mpv=.
+
+* Dependencies
+
+** Emacs
+
+- Emacs 27.1 or newer.
+- The =plz= package, for making HTTP requests.
+
+** External Programs
+
+- [[https://github.com/mpv-player/mpv][mpv]]: A free, open source, and cross-platform media player. It must be available in your system's =PATH=.
+
+* Installation
+
+Here are sample configurations for different package management setups.
+
+** Using package.el + use-package (Manual)
+
+This method is for users who clone or download =animacs.el= manually and place it in their Emacs =load-path=. You will also need to install the =plz= dependency yourself.
+
+The following is a sample configuration that also sets the preferred mode to "dub":
+
+#+begin_src emacs-lisp
+(use-package animacs
+  ;; Defer loading until one of these commands is called
+  :commands (animacs-select-and-play-episode animacs-play-next-episode)
+  :custom
+  (animacs-mode "dub"))
+#+end_src
+
+** Using straight.el + use-package
+
+This is the recommended method for installing directly from the source repository. =straight.el= will clone the repository and automatically handle the =plz= dependency.
+
+#+begin_src emacs-lisp
+(use-package animacs
+  :straight (:type git :host github :repo "ShadowTheShade/animacs")
+  :commands (animacs-select-and-play-episode animacs-play-next-episode)
+  :custom
+  (animacs-mode "dub"))
+#+end_src
+
+* Usage
+
+The main entry points are two interactive functions:
+
+- =M-x animacs-select-and-play-episode=: Search for an anime, select a show from the results, and then select an episode to play.
+- =M-x animacs-play-next-episode=: Automatically finds the last show you watched and plays the next available episode.
+
+Watch history is saved to the file specified by =animacs-history-file= (defaults to =~/.emacs.d/animacs-history.json=).
+
+* Configuration
+
+You can customize the behavior of Animacs through the following variables. Use =M-x customize-group RET animacs RET= to configure them.
+
+- =animacs-mode=: Preferred translation type: "sub" or "dub". Default is "sub".
+- =animacs-quality=: Preferred video quality string (e.g., "best", "1080p", "720p"). Default is "best".
+- =animacs-provider-preference=: A list of preferred providers to try in order. Default is =(:wixmp :sharepoint)=.
+- =animacs-mpv-arguments=: List of arguments to pass to the =mpv= player. Default is ='("--no-terminal")=.
+- =animacs-log-episodes=: If non-nil, record each watched episode. Default is =t=.
+- =animacs-history-file=: File where viewing history is stored.
+
+* License
+
+This package is licensed under the GNU General Public License v3.0 or later.

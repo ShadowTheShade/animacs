@@ -5,6 +5,7 @@
 ;; Author: ShadowTheShade <antogagliano3@gmail.com>
 ;; URL: https://github.com/ShadowTheShade/animacs
 ;; Version: 0.1
+;; Package-Requires: ((emacs "27.1") (plz "0.1"))
 
 (require 'json)
 (require 'url-util)
@@ -25,10 +26,6 @@
   :type '(choice (const “sub”) (const “dub”))
   :group 'animacs)
 
-(defcustom animacs-download-directory default-directory
-  "Directory in which downloaded episodes will be stored."
-  :type 'directory
-  :group 'animacs)
 
 (defcustom animacs-log-episodes t
   "If non-nil, record each watched episode in the history log."
@@ -380,6 +377,7 @@ show ID and episode timestamps."
            mpv-bin
            (append animacs-mpv-arguments extra-args (list url)))))
 
+;;;###autoload
 (defun animacs-select-and-play-episode ()
   "Interactively select a show, then pick an episode from the minibuffer."
   (interactive)
@@ -400,6 +398,7 @@ show ID and episode timestamps."
           (animacs-mpv-play stream-url))
       (message "Could not find a playable stream for the selected episode."))))
 
+;;;###autoload
 (defun animacs-play-next-episode ()
   "Play the next episode of the most recently watched show."
   (interactive)
