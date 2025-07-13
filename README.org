@@ -1,4 +1,3 @@
-#+TITLE: Animacs
 #+AUTHOR: Anthony Gagliano
 #+EMAIL: antogagliano3@gmail.com
 #+DESCRIPTION: An Emacs client for searching and watching anime.
